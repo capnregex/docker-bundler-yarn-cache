@@ -4,6 +4,9 @@
 .cache/yarn/**
 !.cache/yarn/.gitkeep
 .cache/mise/
+# Accidental per-app caches (must use monorepo .cache/bundle only)
+fred/.cache/
+george/.cache/
 vendor/bundle/
 
 # App runtime / build artifacts

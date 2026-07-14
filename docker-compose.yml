@@ -13,18 +13,18 @@ services:
     user: dev
     working_dir: /workspace
     environment:
+      # Absolute path so host-relative .bundle/config values cannot shadow it.
       BUNDLE_PATH: /workspace/.cache/bundle
-      BUNDLE_APP_CONFIG: /workspace/.bundle
+      BUNDLE_DISABLE_SHARED_GEMS: "true"
       YARN_CACHE_FOLDER: /workspace/.cache/yarn
       MISE_DATA_DIR: /home/dev/.local/share/mise
       HOME: /home/dev
     volumes:
-      # Shared monorepo workspace (apps + root tooling)
+      # Full monorepo (apps, root tooling, caches)
       - .:/workspace:cached
-      # Explicit named-style bind mounts for gem/yarn caches (host-local)
+      # Explicit binds for the shared caches (same host dirs as above)
       - ./.cache/bundle:/workspace/.cache/bundle:cached
       - ./.cache/yarn:/workspace/.cache/yarn:cached
-      # App directories (also covered by workspace mount; listed for clarity)
       - ./fred:/workspace/fred:cached
       - ./george:/workspace/george:cached
     stdin_open: true

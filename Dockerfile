@@ -15,7 +15,6 @@ ENV LANG=C.UTF-8 \
     MISE_RUBY_COMPILE=false \
     PATH=/home/dev/.local/bin:/home/dev/.local/share/mise/shims:${PATH} \
     BUNDLE_PATH=/workspace/.cache/bundle \
-    BUNDLE_APP_CONFIG=/workspace/.bundle \
     YARN_CACHE_FOLDER=/workspace/.cache/yarn \
     HOME=/home/dev \
     WORKSPACE=/workspace

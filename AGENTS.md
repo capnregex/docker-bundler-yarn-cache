@@ -48,6 +48,8 @@ Do not bump Ruby or Rails casually without updating `mise.toml`, both apps’ `.
 3. Keep mounts for `.cache/bundle`, `.cache/yarn`, `fred`, and `george` intact.
 4. Match host UID/GID with `DEV_UID` / `DEV_GID` build args when bind-mount permission issues appear.
 5. Container `BUNDLE_PATH` must remain `/workspace/.cache/bundle`.
+6. **Never** set `BUNDLE_APP_CONFIG` to the monorepo root `.bundle` while running app Gemfiles. That makes Bundler apply root `path: ".cache/bundle"` relative to the app root and creates stray `fred/.cache/bundle` / `george/.cache/bundle` trees. Each app keeps its own `.bundle/config` with `path: "../.cache/bundle"`.
+7. Do not commit per-app `.cache/` directories; only the monorepo `.cache/bundle` (gitignored contents) is shared.
 
 ## Rails apps (Fred & George)
 

@@ -83,7 +83,9 @@ docker compose --profile dev run --rm dev
 | `fred` | `/workspace/fred` | Fred app |
 | `george` | `/workspace/george` | George app |
 
-`BUNDLE_PATH` and `YARN_CACHE_FOLDER` are set in Compose so container installs write into the same host caches you use locally.
+`BUNDLE_PATH` and `YARN_CACHE_FOLDER` are set in Compose so container installs write into the same host caches you use locally. App-level `.bundle/config` files point at `../.cache/bundle` (relative to each app root), which resolves to the monorepo cache both on the host and under `/workspace` in the container.
+
+**Native extensions:** gems compiled on the host may not load inside the container (different Ruby install path). Compose runs `bundle check || bundle install` on start so extensions are rebuilt into the shared cache when needed.
 
 ## RuboCop
 
