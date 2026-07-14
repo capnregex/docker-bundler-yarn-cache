@@ -1,0 +1,81 @@
+# Development compose: Arch + mise image with bind mounts for shared gem/yarn
+# caches and the Fred / George Rails apps.
+
+services:
+  base: &base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DEV_UID: ${DEV_UID:-1000}
+        DEV_GID: ${DEV_GID:-1000}
+    image: docker-bundler-yarn-cache-dev:latest
+    user: dev
+    working_dir: /workspace
+    environment:
+      BUNDLE_PATH: /workspace/.cache/bundle
+      BUNDLE_APP_CONFIG: /workspace/.bundle
+      YARN_CACHE_FOLDER: /workspace/.cache/yarn
+      MISE_DATA_DIR: /home/dev/.local/share/mise
+      HOME: /home/dev
+    volumes:
+      # Shared monorepo workspace (apps + root tooling)
+      - .:/workspace:cached
+      # Explicit named-style bind mounts for gem/yarn caches (host-local)
+      - ./.cache/bundle:/workspace/.cache/bundle:cached
+      - ./.cache/yarn:/workspace/.cache/yarn:cached
+      # App directories (also covered by workspace mount; listed for clarity)
+      - ./fred:/workspace/fred:cached
+      - ./george:/workspace/george:cached
+    stdin_open: true
+    tty: true
+
+  # Interactive shell for general development / bundle work
+  dev:
+    <<: *base
+    profiles: ["dev"]
+    command: ["bash", "-lc", "mise install && exec bash"]
+
+  # Fred Rails app (http://localhost:3000)
+  fred:
+    <<: *base
+    working_dir: /workspace/fred
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        eval "$(mise activate bash)"
+        bundle check || bundle install
+        bin/rails db:prepare
+        exec bin/rails server -b 0.0.0.0 -p 3000
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/up"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  # George Rails app (http://localhost:3001)
+  george:
+    <<: *base
+    working_dir: /workspace/george
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        eval "$(mise activate bash)"
+        bundle check || bundle install
+        bin/rails db:prepare
+        exec bin/rails server -b 0.0.0.0 -p 3001
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/up"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
