@@ -1,8 +1,9 @@
 # Pin tools for host and container parity (mise)
+# This branch uses classic Yarn 1.x (not Yarn Berry 2+).
 [tools]
 ruby = "4.0.5"
 node = "25.7.0"
-yarn = "4.16.0"
+yarn = "1.22.22"
 
 [settings]
 idiomatic_version_file_enable_tools = ["ruby"]

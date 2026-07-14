@@ -9,9 +9,9 @@ This monorepo is a **development test bed** for:
 - Two independent Rails 8 apps: **`fred/`** and **`george/`**
 - A **shared Bundler install path** at **`.cache/bundle`**
 - A **shared Rubygems download cache** at **`.cache/rubygems`** (host `bundle cache`)
-- A **shared Yarn download cache** at **`.cache/yarn`**
+- **Classic Yarn 1.22.x** (this branch): offline mirror at **`.cache/yarn`**, cache folder at **`.cache/yarn-cache`**
 - Host `bin/setup` warms caches; container `bin/docker-app` prefers them before network
-- An **Arch Linux** Docker image with a **`dev`** user and **mise** for Ruby/Node
+- An **Arch Linux** Docker image with a **`dev`** user and **mise** for Ruby/Node/Yarn 1
 - Docker Compose bind mounts that keep host and container caches in sync
 
 Prefer changes that preserve this multi-app + shared-cache design over collapsing apps into one tree.
@@ -23,11 +23,12 @@ Prefer changes that preserve this multi-app + shared-cache design over collapsin
 | Ruby / Node / Yarn | `mise.toml` |
 | Root gems (rails, rubocop, …) | root `Gemfile` / `Gemfile.lock` |
 | App gems | `fred/Gemfile`, `george/Gemfile` (+ lockfiles) |
-| JS workspaces | root `package.json`, `yarn.lock`, `.yarnrc.yml` |
+| JS workspaces | root `package.json`, classic `yarn.lock`, **`.yarnrc`** (Yarn 1) |
 | App JS test deps | `fred/package.json`, `george/package.json` |
 | Bundler install path | `.bundle/config` → `.cache/bundle` |
 | Bundler download cache | `BUNDLE_CACHE_PATH` → `.cache/rubygems` |
-| Yarn cache | `.yarnrc.yml` → `.cache/yarn` |
+| Yarn offline mirror | `.yarnrc` `yarn-offline-mirror` → `.cache/yarn` |
+| Yarn cache folder | `.yarnrc` / `YARN_CACHE_FOLDER` → `.cache/yarn-cache` |
 | Host bootstrap | `bin/setup` |
 | Container app entry | `bin/docker-app` |
 | Compose / image | `docker-compose.yml`, `Dockerfile` |
@@ -61,7 +62,8 @@ Do not bump Ruby or Rails casually without updating `mise.toml`, both apps’ `.
 5. Container `BUNDLE_PATH` = `/workspace/.cache/bundle` and `BUNDLE_CACHE_PATH` = `/workspace/.cache/rubygems`.
 6. **Never** set `BUNDLE_APP_CONFIG` to the monorepo root `.bundle` while running app Gemfiles. That makes Bundler apply root `path: ".cache/bundle"` relative to the app root and creates stray `fred/.cache/bundle` / `george/.cache/bundle` trees.
 7. Do not commit per-app `.cache/` directories or `.cache/rubygems` / `.cache/yarn` contents.
-8. Preferred flow: host `bin/setup` (warm caches) → `docker compose up` (`bin/docker-app` prefers `bundle install --local` and `yarn install --immutable-cache`).
+8. Preferred flow: host `bin/setup` (warm caches) → `docker compose up` (`bin/docker-app` prefers `bundle install --local` and classic `yarn install --offline` / `--prefer-offline`).
+9. Do **not** introduce Yarn Berry (`.yarnrc.yml`, `packageManager: yarn@2+`, PnP) on this branch.
 
 ## Rails apps (Fred & George)
 
@@ -73,12 +75,14 @@ Do not bump Ruby or Rails casually without updating `mise.toml`, both apps’ `.
 - Default routes: `root "home#index"`, health at `/up`.
 - Prefer symmetric changes: if you add a concern, route, gem, or Stimulus controller to one app for demo purposes, either mirror it in the other or document the intentional difference in the PR/commit message.
 
-## Yarn / JS test rules
+## Yarn / JS test rules (classic 1.x)
 
-1. Install from the **repo root**: `yarn install` (workspaces + shared `.cache/yarn`).
-2. Run tests with `yarn test`, `yarn test:fred`, or `yarn test:george`.
-3. Commit `yarn.lock` and workspace `package.json` files; do **not** commit `node_modules` or `.cache/yarn`.
-4. New Stimulus controllers should ship with a Vitest example under `test/javascript/controllers/`.
+1. Install from the **repo root**: `yarn install` (classic workspaces + offline mirror).
+2. Expect `yarn --version` → `1.22.x` (mise pin). Setup exits if major ≠ 1.
+3. Run tests with `yarn test`, `yarn test:fred`, or `yarn test:george`.
+4. Commit classic `yarn.lock` and workspace `package.json` files; do **not** commit `node_modules`, `.cache/yarn`, or `.cache/yarn-cache`.
+5. Prefer classic flags: `--frozen-lockfile`, `--offline`, `--prefer-offline` (not Berry `--immutable*`).
+6. New Stimulus controllers should ship with a Vitest example under `test/javascript/controllers/`.
 
 ## What to commit
 

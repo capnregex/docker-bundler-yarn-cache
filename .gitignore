@@ -5,6 +5,8 @@
 !.cache/rubygems/.gitkeep
 .cache/yarn/**
 !.cache/yarn/.gitkeep
+.cache/yarn-cache/**
+!.cache/yarn-cache/.gitkeep
 .cache/mise/
 # Accidental per-app caches (must use monorepo .cache/* only)
 fred/.cache/

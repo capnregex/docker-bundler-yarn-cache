@@ -1,6 +1,8 @@
 # docker-bundler-yarn-cache
 
-Test bed for running **two Rails apps** (Fred and George) in a shared Docker development environment with a **host-mounted Bundler gem cache** and Yarn cache.
+Test bed for running **two Rails apps** (Fred and George) in a shared Docker development environment with a **host-mounted Bundler gem cache** and **classic Yarn 1.x** offline mirror.
+
+> **Branch note:** this branch (`classic-yarn-1`) uses **Yarn 1.22.x** (classic). The `master` line may use Yarn Berry (2+).
 
 ## Layout
 
@@ -10,10 +12,11 @@ Test bed for running **two Rails apps** (Fred and George) in a shared Docker dev
 ├── .cache/
 │   ├── bundle/             # Shared gem *install* tree (host + containers)
 │   ├── rubygems/           # Shared gem *download* cache (.gem files)
-│   └── yarn/               # Shared Yarn download cache
-├── .yarnrc.yml             # Yarn cacheFolder → .cache/yarn
-├── package.json            # Yarn workspaces (fred + george)
-├── yarn.lock
+│   ├── yarn/               # Classic yarn-offline-mirror (tarballs)
+│   └── yarn-cache/         # Classic --cache-folder / YARN_CACHE_FOLDER
+├── .yarnrc                 # Classic Yarn 1.x config (not .yarnrc.yml)
+├── package.json            # Classic Yarn workspaces (fred + george)
+├── yarn.lock               # Classic Yarn v1 lockfile
 ├── bin/setup               # Fresh clone: install + warm download caches
 ├── bin/docker-app          # Container entry: prefer local caches
 ├── fred/                   # Rails 8 + Hotwire app (port 3000)
@@ -23,7 +26,7 @@ Test bed for running **two Rails apps** (Fred and George) in a shared Docker dev
 ├── Dockerfile              # Arch Linux + `dev` user + mise
 ├── docker-compose.yml
 ├── Gemfile                 # Root tooling: rails, rubocop
-├── mise.toml               # Pinned Ruby / Node / Yarn
+├── mise.toml               # Pinned Ruby / Node / Yarn 1.22.22
 ├── AGENTS.md               # Guidance for coding agents
 └── README.md
 ```
@@ -35,7 +38,7 @@ Test bed for running **two Rails apps** (Fred and George) in a shared Docker dev
 | Ruby | 4.0.5 via [mise](https://mise.jdx.dev) |
 | Rails | ~> 8.1 (8.1.3) |
 | Hotwire | Turbo + Stimulus (importmap) |
-| Node / Yarn | 25.7.0 / 4.16.0 via mise |
+| Node / Yarn | 25.7.0 / **1.22.22 classic** via mise |
 | JS tests | Vitest + jsdom (Stimulus controllers) |
 | RuboCop | ~> 1.88 (root tooling) |
 | Base image | `archlinux:latest` |
@@ -53,12 +56,13 @@ bin/setup
 
 That script is idempotent and will:
 
-1. Trust/install tools from `mise.toml` (Ruby, Node, Yarn)
-2. Create `.cache/bundle`, `.cache/rubygems`, and `.cache/yarn`
+1. Trust/install tools from `mise.toml` (Ruby, Node, **Yarn 1.22**)
+2. Create `.cache/bundle`, `.cache/rubygems`, `.cache/yarn`, `.cache/yarn-cache`
 3. `bundle install` for root, Fred, and George into `.cache/bundle`
 4. `bundle cache --all-platforms` → package `.gem` files into `.cache/rubygems`
-5. `yarn install` (+ offline verify) → downloads into `.cache/yarn`, link `node_modules`
-6. `bin/rails db:prepare` (and clear log/tmp) for both apps
+5. Classic `yarn install` → fill **yarn-offline-mirror** (`.cache/yarn`) + link `node_modules`
+6. Verify with `yarn install --frozen-lockfile --offline`
+7. `bin/rails db:prepare` (and clear log/tmp) for both apps
 
 Options: `bin/setup --help` (e.g. `--reset`, `--docker-build`, `--skip-js`, `--skip-cache`).
 
@@ -75,10 +79,11 @@ docker compose up fred george
 |-------|------|
 | `.cache/rubygems` | Packaged gems (`bundle cache`); `bin/docker-app` runs `bundle install --local` first |
 | `.cache/bundle` | Installed gem tree (extensions may rebuild inside the container) |
-| `.cache/yarn` | Yarn package tarballs; `--immutable-cache` preferred when `node_modules` is missing |
+| `.cache/yarn` | Classic **yarn-offline-mirror** tarballs; `yarn install --offline` preferred |
+| `.cache/yarn-cache` | Classic `YARN_CACHE_FOLDER` / `--cache-folder` |
 | `node_modules` | Linked on the host and bind-mounted into the container |
 
-Containers use `bin/docker-app`: prefer local caches, fall back to the network only on a cache miss.
+Containers use `bin/docker-app`: `--offline` → `--prefer-offline` → network (classic Yarn 1 flags).
 
 ```bash
 # Run apps on the host
@@ -107,10 +112,10 @@ On connect it greets with `Hello, Fred!` (or `Hello World!` when no name is set)
 Stimulus controllers are tested with **Node + Vitest + jsdom** (browser packages still ship via importmap; npm is for tests only).
 
 ```bash
-yarn install          # once, from repo root
-yarn test             # fred + george
+yarn install          # once, from repo root (classic 1.x workspaces)
+yarn test             # fred + george (yarn workspaces run test)
 yarn test:fred        # one workspace
-yarn workspace fred test:watch
+yarn workspace fred test --watch
 ```
 
 Tests live in `fred|george/test/javascript/**/*.test.js` and import controllers from `app/javascript/controllers/`.
@@ -141,14 +146,15 @@ docker compose --profile dev run --rm dev
 
 | Host path | Container path | Purpose |
 |-----------|----------------|---------|
-| `.` | `/workspace` | Full monorepo (includes `node_modules`) |
+| `.` | `/workspace` | Full monorepo (includes `node_modules`, `.yarnrc`) |
 | `.cache/bundle` | `/workspace/.cache/bundle` | Bundler install tree |
 | `.cache/rubygems` | `/workspace/.cache/rubygems` | Packaged `.gem` download cache |
-| `.cache/yarn` | `/workspace/.cache/yarn` | Yarn download cache |
+| `.cache/yarn` | `/workspace/.cache/yarn` | Classic yarn-offline-mirror |
+| `.cache/yarn-cache` | `/workspace/.cache/yarn-cache` | Classic yarn cache folder |
 | `fred` | `/workspace/fred` | Fred app |
 | `george` | `/workspace/george` | George app |
 
-Compose sets `BUNDLE_PATH`, `BUNDLE_CACHE_PATH`, and `YARN_CACHE_FOLDER` to those absolute paths. App `.bundle/config` uses `../.cache/bundle` and `../.cache/rubygems` on the host.
+Compose sets `BUNDLE_PATH`, `BUNDLE_CACHE_PATH`, and `YARN_CACHE_FOLDER` (classic cache folder). The offline mirror is configured in **`.yarnrc`** (`yarn-offline-mirror`).
 
 **Native extensions:** host-built native gems may not load in the container. `bin/docker-app` reinstalls from `.cache/rubygems` with `bundle install --local` (no re-download when the cache is complete), compiling extensions inside the image as needed.
 

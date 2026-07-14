@@ -115,8 +115,8 @@ fi
 
 # --- cache directories ---------------------------------------------------------
 step "Ensuring shared cache directories"
-mkdir -p .cache/bundle .cache/rubygems .cache/yarn
-touch .cache/bundle/.gitkeep .cache/rubygems/.gitkeep .cache/yarn/.gitkeep
+mkdir -p .cache/bundle .cache/rubygems .cache/yarn .cache/yarn-cache
+touch .cache/bundle/.gitkeep .cache/rubygems/.gitkeep .cache/yarn/.gitkeep .cache/yarn-cache/.gitkeep
 
 # --- root gems (rails generators, rubocop) ------------------------------------
 step "Installing root gems → .cache/bundle"
@@ -168,25 +168,32 @@ else
   step "Skipping app setup (--skip-apps)"
 fi
 
-# --- JavaScript (Yarn workspaces) ---------------------------------------------
+# --- JavaScript (classic Yarn 1.x workspaces) ---------------------------------
 if [[ "$SKIP_JS" -eq 0 ]]; then
-  step "Installing Yarn workspaces (downloads → .cache/yarn, link → node_modules)"
-  # First pass may populate cache from network; second ensures cache is complete.
-  run yarn install
+  yarn_major="$(yarn --version | cut -d. -f1 || echo 0)"
+  if [[ "$yarn_major" -ne 1 ]]; then
+    echo "error: this branch expects classic Yarn 1.x (got $(yarn --version))" >&2
+    echo "       check mise.toml (yarn = \"1.22.22\") and re-run mise install" >&2
+    exit 1
+  fi
+
+  step "Installing Yarn 1 workspaces (offline-mirror → .cache/yarn)"
+  # Online install fills yarn-offline-mirror (.cache/yarn) and links node_modules.
+  run yarn install --frozen-lockfile 2>/dev/null || run yarn install
+
   if [[ "$SKIP_CACHE" -eq 0 ]]; then
-    step "Verifying Yarn download cache (--immutable-cache)"
-    # --immutable-cache fails if Yarn would need to fetch anything not already
-    # present under .cache/yarn (Yarn 4 has no --offline flag).
-    if yarn install --immutable --immutable-cache; then
-      echo "Yarn cache is complete (no network fetch required)"
+    step "Verifying classic Yarn offline mirror (--offline)"
+    # --prefer-offline uses mirror/cache first; --offline requires a full mirror.
+    if yarn install --frozen-lockfile --offline; then
+      echo "Yarn offline mirror is complete (no network fetch required)"
     else
-      echo "warning: yarn cache incomplete; re-running install to fill gaps"
-      run yarn install --immutable
-      if yarn install --immutable --immutable-cache; then
-        echo "Yarn cache is complete after refill"
+      echo "warning: yarn --offline failed; re-running online install to fill mirror"
+      run yarn install
+      if yarn install --frozen-lockfile --offline; then
+        echo "Yarn offline mirror is complete after refill"
       else
-        echo "warning: yarn cache still incomplete for full offline mode"
-        echo "         Docker will fall back to network for missing packages"
+        echo "warning: yarn offline mirror still incomplete"
+        echo "         Docker will use --prefer-offline then fall back to network"
       fi
     fi
   fi
@@ -202,12 +209,14 @@ if [[ -d .cache/rubygems ]]; then
   gem_count="$(find .cache/rubygems -type f \( -name '*.gem' -o -name '*.gemspec' \) 2>/dev/null | wc -l | tr -d ' ')"
 fi
 if [[ -d .cache/yarn ]]; then
-  yarn_count="$(find .cache/yarn -type f 2>/dev/null | wc -l | tr -d ' ')"
+  yarn_count="$(find .cache/yarn -type f ! -name '.gitkeep' 2>/dev/null | wc -l | tr -d ' ')"
 fi
-echo "  .cache/rubygems : ${gem_count} packaged gem artifacts"
-echo "  .cache/bundle   : install tree for host (and container reinstalls)"
-echo "  .cache/yarn     : ${yarn_count} yarn cache files"
-echo "  node_modules    : $( [[ -d node_modules ]] && echo present || echo missing )"
+echo "  .cache/rubygems   : ${gem_count} packaged gem artifacts"
+echo "  .cache/bundle     : install tree for host (and container reinstalls)"
+echo "  .cache/yarn       : ${yarn_count} classic offline-mirror tarballs"
+echo "  .cache/yarn-cache : classic yarn --cache-folder"
+echo "  node_modules      : $( [[ -d node_modules ]] && echo present || echo missing )"
+echo "  yarn              : $(yarn --version) (classic 1.x expected)"
 
 # --- optional Docker image ----------------------------------------------------
 if [[ "$DOCKER_BUILD" -eq 1 ]]; then
@@ -227,7 +236,8 @@ Host tools and download caches are ready for Docker to use preferentially.
 
   Gem installs:   ${ROOT}/.cache/bundle
   Gem downloads:  ${ROOT}/.cache/rubygems   (bundle install --local)
-  Yarn downloads: ${ROOT}/.cache/yarn       (yarn install --immutable-cache)
+  Yarn mirror:    ${ROOT}/.cache/yarn       (classic yarn-offline-mirror)
+  Yarn cache:     ${ROOT}/.cache/yarn-cache (classic --cache-folder)
   node_modules:   ${ROOT}/node_modules      (bind-mounted into containers)
 
 Recommended Docker flow:
