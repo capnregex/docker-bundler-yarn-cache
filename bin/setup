@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# Setup this monorepo after a fresh clone (or re-run anytime — idempotent).
+#
+# Installs mise tools, downloads gems + node packages into shared host caches,
+# installs them for local use, and prepares Fred + George databases.
+# Run this on the host before docker compose so containers can prefer those
+# cached downloads (see bin/docker-app).
+#
+# Usage:
+#   bin/setup
+#   bin/setup --reset          # also reset app databases
+#   bin/setup --docker-build   # build the Arch dev image after host setup
+#   bin/setup --skip-mise      # assume Ruby/Node/Yarn already on PATH
+#   bin/setup --skip-js        # skip yarn install / yarn cache warm
+#   bin/setup --skip-db        # skip rails db:prepare
+#   bin/setup --skip-apps      # only root gems + yarn (no per-app bundle/db)
+#   bin/setup --skip-cache     # install only; do not run bundle cache / package
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+SKIP_MISE=0
+SKIP_JS=0
+SKIP_DB=0
+SKIP_APPS=0
+SKIP_CACHE=0
+DOCKER_BUILD=0
+RESET_DB=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --skip-mise) SKIP_MISE=1 ;;
+    --skip-js) SKIP_JS=1 ;;
+    --skip-db) SKIP_DB=1 ;;
+    --skip-apps) SKIP_APPS=1 ;;
+    --skip-cache) SKIP_CACHE=1 ;;
+    --docker-build) DOCKER_BUILD=1 ;;
+    --reset) RESET_DB=1 ;;
+    -h|--help)
+      awk 'NR==1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $arg" >&2
+      echo "Run bin/setup --help for usage." >&2
+      exit 1
+      ;;
+  esac
+done
+
+step() {
+  printf '\n== %s ==\n' "$1"
+}
+
+run() {
+  echo "+ $*"
+  "$@"
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "error: required command not found: $1" >&2
+    exit 1
+  fi
+}
+
+# Prefer mise-provided shims once tools are installed.
+activate_mise() {
+  if command -v mise >/dev/null 2>&1; then
+    # shellcheck disable=SC1091
+    eval "$(mise activate bash)"
+  fi
+}
+
+cache_gems() {
+  # Package .gem files into .cache/rubygems for Docker/host offline preference.
+  # --all-platforms covers linux container installs from a host lockfile.
+  run bundle cache --all-platforms
+}
+
+step "Repository root"
+echo "$ROOT"
+
+# --- mise (Ruby / Node / Yarn) -------------------------------------------------
+if [[ "$SKIP_MISE" -eq 0 ]]; then
+  step "Installing mise tools (mise.toml)"
+  if command -v mise >/dev/null 2>&1; then
+    run mise trust "$ROOT/mise.toml" || true
+    run mise install
+    activate_mise
+  else
+    echo "warning: mise not found; using whatever Ruby/Node/Yarn are on PATH"
+    echo "         install mise from https://mise.jdx.dev for pinned versions"
+  fi
+else
+  step "Skipping mise (--skip-mise)"
+  activate_mise
+fi
+
+require_cmd ruby
+require_cmd bundle
+if [[ "$SKIP_JS" -eq 0 ]]; then
+  require_cmd node
+  require_cmd yarn
+fi
+
+echo "ruby:  $(ruby -v)"
+echo "bundle: $(bundle -v)"
+if [[ "$SKIP_JS" -eq 0 ]]; then
+  echo "node:  $(node -v)"
+  echo "yarn:  $(yarn -v)"
+fi
+
+# --- cache directories ---------------------------------------------------------
+step "Ensuring shared cache directories"
+mkdir -p .cache/bundle .cache/rubygems .cache/yarn
+touch .cache/bundle/.gitkeep .cache/rubygems/.gitkeep .cache/yarn/.gitkeep
+
+# --- root gems (rails generators, rubocop) ------------------------------------
+step "Installing root gems → .cache/bundle"
+if bundle check >/dev/null 2>&1; then
+  echo "Root bundle already satisfied"
+else
+  run bundle install
+fi
+if [[ "$SKIP_CACHE" -eq 0 ]]; then
+  step "Packaging root gems into .cache/rubygems (download cache)"
+  cache_gems
+fi
+
+# --- app gems + databases -----------------------------------------------------
+setup_app() {
+  local app="$1"
+  step "Setting up ${app}"
+  (
+    cd "$ROOT/$app"
+    if bundle check >/dev/null 2>&1; then
+      echo "${app} bundle already satisfied"
+    else
+      run bundle install
+    fi
+
+    if [[ "$SKIP_CACHE" -eq 0 ]]; then
+      echo "Packaging ${app} gems into .cache/rubygems (download cache)"
+      cache_gems
+    fi
+
+    if [[ "$SKIP_DB" -eq 0 ]]; then
+      if [[ "$RESET_DB" -eq 1 ]]; then
+        run bin/rails db:prepare
+        run bin/rails db:reset
+      else
+        run bin/rails db:prepare
+      fi
+      run bin/rails log:clear tmp:clear
+    else
+      echo "Skipping database for ${app} (--skip-db)"
+    fi
+  )
+}
+
+if [[ "$SKIP_APPS" -eq 0 ]]; then
+  setup_app fred
+  setup_app george
+else
+  step "Skipping app setup (--skip-apps)"
+fi
+
+# --- JavaScript (Yarn workspaces) ---------------------------------------------
+if [[ "$SKIP_JS" -eq 0 ]]; then
+  step "Installing Yarn workspaces (downloads → .cache/yarn, link → node_modules)"
+  # First pass may populate cache from network; second ensures cache is complete.
+  run yarn install
+  if [[ "$SKIP_CACHE" -eq 0 ]]; then
+    step "Verifying Yarn download cache (--immutable-cache)"
+    # --immutable-cache fails if Yarn would need to fetch anything not already
+    # present under .cache/yarn (Yarn 4 has no --offline flag).
+    if yarn install --immutable --immutable-cache; then
+      echo "Yarn cache is complete (no network fetch required)"
+    else
+      echo "warning: yarn cache incomplete; re-running install to fill gaps"
+      run yarn install --immutable
+      if yarn install --immutable --immutable-cache; then
+        echo "Yarn cache is complete after refill"
+      else
+        echo "warning: yarn cache still incomplete for full offline mode"
+        echo "         Docker will fall back to network for missing packages"
+      fi
+    fi
+  fi
+else
+  step "Skipping Yarn install (--skip-js)"
+fi
+
+# --- cache summary ------------------------------------------------------------
+step "Cache summary"
+gem_count=0
+yarn_count=0
+if [[ -d .cache/rubygems ]]; then
+  gem_count="$(find .cache/rubygems -type f \( -name '*.gem' -o -name '*.gemspec' \) 2>/dev/null | wc -l | tr -d ' ')"
+fi
+if [[ -d .cache/yarn ]]; then
+  yarn_count="$(find .cache/yarn -type f 2>/dev/null | wc -l | tr -d ' ')"
+fi
+echo "  .cache/rubygems : ${gem_count} packaged gem artifacts"
+echo "  .cache/bundle   : install tree for host (and container reinstalls)"
+echo "  .cache/yarn     : ${yarn_count} yarn cache files"
+echo "  node_modules    : $( [[ -d node_modules ]] && echo present || echo missing )"
+
+# --- optional Docker image ----------------------------------------------------
+if [[ "$DOCKER_BUILD" -eq 1 ]]; then
+  step "Building Docker image"
+  require_cmd docker
+  if docker compose version >/dev/null 2>&1; then
+    run docker compose build
+  else
+    run docker-compose build
+  fi
+fi
+
+# --- summary ------------------------------------------------------------------
+step "Setup complete"
+cat <<EOF
+Host tools and download caches are ready for Docker to use preferentially.
+
+  Gem installs:   ${ROOT}/.cache/bundle
+  Gem downloads:  ${ROOT}/.cache/rubygems   (bundle install --local)
+  Yarn downloads: ${ROOT}/.cache/yarn       (yarn install --immutable-cache)
+  node_modules:   ${ROOT}/node_modules      (bind-mounted into containers)
+
+Recommended Docker flow:
+  bin/setup
+  docker compose up fred george
+  # containers run bin/docker-app → prefer local caches, network only on miss
+
+Next steps:
+  yarn test
+  (cd fred && bin/rails server -p 3000)
+  (cd george && bin/rails server -p 3001)
+  docker compose up fred george
+
+Re-run anytime; the script is idempotent.
+EOF

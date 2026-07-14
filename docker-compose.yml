@@ -1,5 +1,9 @@
 # Development compose: Arch + mise image with bind mounts for shared gem/yarn
-# caches and the Fred / George Rails apps.
+# download caches and the Fred / George Rails apps.
+#
+# Prefer host-warmed caches: run `bin/setup` on the host first, then
+# `docker compose up`. App containers use bin/docker-app which installs from
+# .cache/rubygems and .cache/yarn before falling back to the network.
 
 services:
   base: &base
@@ -13,24 +17,28 @@ services:
     user: dev
     working_dir: /workspace
     environment:
-      # Absolute path so host-relative .bundle/config values cannot shadow it.
+      # Install tree + download caches (absolute so app-relative configs cannot drift).
       BUNDLE_PATH: /workspace/.cache/bundle
+      BUNDLE_CACHE_PATH: /workspace/.cache/rubygems
+      BUNDLE_CACHE_ALL: "true"
+      BUNDLE_CACHE_ALL_PLATFORMS: "true"
       BUNDLE_DISABLE_SHARED_GEMS: "true"
       YARN_CACHE_FOLDER: /workspace/.cache/yarn
       MISE_DATA_DIR: /home/dev/.local/share/mise
       HOME: /home/dev
     volumes:
-      # Full monorepo (apps, root tooling, caches)
+      # Full monorepo (apps, root tooling, node_modules, caches)
       - .:/workspace:cached
-      # Explicit binds for the shared caches (same host dirs as above)
+      # Explicit binds for shared install + download caches
       - ./.cache/bundle:/workspace/.cache/bundle:cached
+      - ./.cache/rubygems:/workspace/.cache/rubygems:cached
       - ./.cache/yarn:/workspace/.cache/yarn:cached
       - ./fred:/workspace/fred:cached
       - ./george:/workspace/george:cached
     stdin_open: true
     tty: true
 
-  # Interactive shell for general development / bundle work
+  # Interactive shell for general development / cache inspection
   dev:
     <<: *base
     profiles: ["dev"]
@@ -40,15 +48,17 @@ services:
   fred:
     <<: *base
     working_dir: /workspace/fred
-    command:
-      - bash
-      - -lc
-      - |
-        set -euo pipefail
-        eval "$(mise activate bash)"
-        bundle check || bundle install
-        bin/rails db:prepare
-        exec bin/rails server -b 0.0.0.0 -p 3000
+    environment:
+      BUNDLE_PATH: /workspace/.cache/bundle
+      BUNDLE_CACHE_PATH: /workspace/.cache/rubygems
+      BUNDLE_CACHE_ALL: "true"
+      BUNDLE_CACHE_ALL_PLATFORMS: "true"
+      BUNDLE_DISABLE_SHARED_GEMS: "true"
+      YARN_CACHE_FOLDER: /workspace/.cache/yarn
+      MISE_DATA_DIR: /home/dev/.local/share/mise
+      HOME: /home/dev
+      PORT: "3000"
+    command: ["bash", "-lc", "exec /workspace/bin/docker-app"]
     ports:
       - "3000:3000"
     healthcheck:
@@ -56,21 +66,23 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 40s
+      start_period: 60s
 
   # George Rails app (http://localhost:3001)
   george:
     <<: *base
     working_dir: /workspace/george
-    command:
-      - bash
-      - -lc
-      - |
-        set -euo pipefail
-        eval "$(mise activate bash)"
-        bundle check || bundle install
-        bin/rails db:prepare
-        exec bin/rails server -b 0.0.0.0 -p 3001
+    environment:
+      BUNDLE_PATH: /workspace/.cache/bundle
+      BUNDLE_CACHE_PATH: /workspace/.cache/rubygems
+      BUNDLE_CACHE_ALL: "true"
+      BUNDLE_CACHE_ALL_PLATFORMS: "true"
+      BUNDLE_DISABLE_SHARED_GEMS: "true"
+      YARN_CACHE_FOLDER: /workspace/.cache/yarn
+      MISE_DATA_DIR: /home/dev/.local/share/mise
+      HOME: /home/dev
+      PORT: "3001"
+    command: ["bash", "-lc", "exec /workspace/bin/docker-app"]
     ports:
       - "3001:3001"
     healthcheck:
@@ -78,4 +90,4 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 40s
+      start_period: 60s

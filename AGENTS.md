@@ -7,8 +7,10 @@ Instructions for AI coding agents and automated tools working in this repository
 This monorepo is a **development test bed** for:
 
 - Two independent Rails 8 apps: **`fred/`** and **`george/`**
-- A **shared Bundler path** at **`.cache/bundle`**
-- A **shared Yarn cache** at **`.cache/yarn`**
+- A **shared Bundler install path** at **`.cache/bundle`**
+- A **shared Rubygems download cache** at **`.cache/rubygems`** (host `bundle cache`)
+- A **shared Yarn download cache** at **`.cache/yarn`**
+- Host `bin/setup` warms caches; container `bin/docker-app` prefers them before network
 - An **Arch Linux** Docker image with a **`dev`** user and **mise** for Ruby/Node
 - Docker Compose bind mounts that keep host and container caches in sync
 
@@ -18,10 +20,16 @@ Prefer changes that preserve this multi-app + shared-cache design over collapsin
 
 | Tool | Source of truth |
 |------|-----------------|
-| Ruby / Node | `mise.toml` |
+| Ruby / Node / Yarn | `mise.toml` |
 | Root gems (rails, rubocop, …) | root `Gemfile` / `Gemfile.lock` |
 | App gems | `fred/Gemfile`, `george/Gemfile` (+ lockfiles) |
-| Bundler path | `.bundle/config` and `fred|george/.bundle/config` → `.cache/bundle` |
+| JS workspaces | root `package.json`, `yarn.lock`, `.yarnrc.yml` |
+| App JS test deps | `fred/package.json`, `george/package.json` |
+| Bundler install path | `.bundle/config` → `.cache/bundle` |
+| Bundler download cache | `BUNDLE_CACHE_PATH` → `.cache/rubygems` |
+| Yarn cache | `.yarnrc.yml` → `.cache/yarn` |
+| Host bootstrap | `bin/setup` |
+| Container app entry | `bin/docker-app` |
 | Compose / image | `docker-compose.yml`, `Dockerfile` |
 
 Do not bump Ruby or Rails casually without updating `mise.toml`, both apps’ `.ruby-version` / Gemfiles, and verifying `bundle install` into `.cache/bundle`.
@@ -34,12 +42,15 @@ Do not bump Ruby or Rails casually without updating `mise.toml`, both apps’ `.
    - `cd george && bundle exec rails …`
 3. Root-level `bundle exec` is for **tooling only** (e.g. generators, RuboCop from the root Gemfile).
 4. After changing any Gemfile, run `bundle install` for that Gemfile and commit the lockfile. Do **not** commit `.cache/bundle` contents.
-5. App-level config uses a relative path:
+5. App-level config uses relative paths:
 
    ```yaml
    # fred/.bundle/config and george/.bundle/config
    BUNDLE_PATH: "../.cache/bundle"
+   BUNDLE_CACHE_PATH: "../.cache/rubygems"
    ```
+
+6. After `bundle install`, package downloads with `bundle cache --all-platforms` into `.cache/rubygems` so containers can `bundle install --local`.
 
 ## Docker rules
 
@@ -47,24 +58,35 @@ Do not bump Ruby or Rails casually without updating `mise.toml`, both apps’ `.
 2. Prefer Compose services `fred` / `george` / `dev` over ad-hoc `docker run` unless debugging the image.
 3. Keep mounts for `.cache/bundle`, `.cache/yarn`, `fred`, and `george` intact.
 4. Match host UID/GID with `DEV_UID` / `DEV_GID` build args when bind-mount permission issues appear.
-5. Container `BUNDLE_PATH` must remain `/workspace/.cache/bundle`.
-6. **Never** set `BUNDLE_APP_CONFIG` to the monorepo root `.bundle` while running app Gemfiles. That makes Bundler apply root `path: ".cache/bundle"` relative to the app root and creates stray `fred/.cache/bundle` / `george/.cache/bundle` trees. Each app keeps its own `.bundle/config` with `path: "../.cache/bundle"`.
-7. Do not commit per-app `.cache/` directories; only the monorepo `.cache/bundle` (gitignored contents) is shared.
+5. Container `BUNDLE_PATH` = `/workspace/.cache/bundle` and `BUNDLE_CACHE_PATH` = `/workspace/.cache/rubygems`.
+6. **Never** set `BUNDLE_APP_CONFIG` to the monorepo root `.bundle` while running app Gemfiles. That makes Bundler apply root `path: ".cache/bundle"` relative to the app root and creates stray `fred/.cache/bundle` / `george/.cache/bundle` trees.
+7. Do not commit per-app `.cache/` directories or `.cache/rubygems` / `.cache/yarn` contents.
+8. Preferred flow: host `bin/setup` (warm caches) → `docker compose up` (`bin/docker-app` prefers `bundle install --local` and `yarn install --immutable-cache`).
 
 ## Rails apps (Fred & George)
 
 - SQLite in development; no external DB service required.
 - Tailwind via `tailwindcss-rails`; importmap + Hotwire (Turbo/Stimulus).
+- Stimulus controllers: `app/javascript/controllers/*_controller.js` (e.g. `hello_controller.js`).
+- JS unit tests: Vitest + jsdom under `test/javascript/`; run via Yarn workspaces from the monorepo root.
+- Browser JS stays on importmap; `@hotwired/stimulus` in `package.json` is for Node tests only—keep versions roughly aligned with the importmap pin.
 - Default routes: `root "home#index"`, health at `/up`.
-- Prefer symmetric changes: if you add a concern, route, or gem to one app for demo purposes, either mirror it in the other or document the intentional difference in the PR/commit message.
+- Prefer symmetric changes: if you add a concern, route, gem, or Stimulus controller to one app for demo purposes, either mirror it in the other or document the intentional difference in the PR/commit message.
+
+## Yarn / JS test rules
+
+1. Install from the **repo root**: `yarn install` (workspaces + shared `.cache/yarn`).
+2. Run tests with `yarn test`, `yarn test:fred`, or `yarn test:george`.
+3. Commit `yarn.lock` and workspace `package.json` files; do **not** commit `node_modules` or `.cache/yarn`.
+4. New Stimulus controllers should ship with a Vitest example under `test/javascript/controllers/`.
 
 ## What to commit
 
-**Commit:** source, Gemfiles/lockfiles, Docker/Compose, `mise.toml`, docs (README, AGENTS.md), app config (except secrets).
+**Commit:** source, Gemfiles/lockfiles, `package.json` / `yarn.lock`, Docker/Compose, `mise.toml`, docs (README, AGENTS.md), app config (except secrets).
 
 **Do not commit:**
 
-- `.cache/bundle/**`, `.cache/yarn/**`
+- `.cache/bundle/**`, `.cache/rubygems/**`, `.cache/yarn/**`
 - `**/config/master.key`, credential keys
 - `**/log/**`, `**/tmp/**`, `**/node_modules/**`
 - Nested `.git` directories under `fred/` or `george/` (this is a single monorepo)
@@ -72,10 +94,10 @@ Do not bump Ruby or Rails casually without updating `mise.toml`, both apps’ `.
 ## Common tasks
 
 ```bash
-# Install all gems into shared cache
-bundle install
-(cd fred && bundle install)
-(cd george && bundle install)
+# Fresh clone / re-bootstrap (mise, gems, yarn, db:prepare)
+bin/setup
+bin/setup --docker-build   # also build Arch image
+bin/setup --help
 
 # Boot both apps in Docker
 docker compose up --build fred george
@@ -85,6 +107,9 @@ docker compose --profile dev run --rm dev
 
 # Lint (root RuboCop)
 bundle exec rubocop
+
+# JS (Stimulus controller unit tests)
+yarn test
 
 # App console
 (cd fred && bin/rails console)

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Start a Rails app inside the Arch dev container, preferring host-warmed caches.
+#
+# Expects:
+#   - cwd: /workspace/fred or /workspace/george
+#   - BUNDLE_PATH / BUNDLE_CACHE_PATH / YARN_CACHE_FOLDER set (compose)
+#   - PORT set (default 3000)
+#
+# Usage (from compose): bin/docker-app
+
+set -euo pipefail
+
+PORT="${PORT:-3000}"
+APP_NAME="$(basename "$(pwd)")"
+
+eval "$(mise activate bash)" 2>/dev/null || true
+
+export BUNDLE_PATH="${BUNDLE_PATH:-/workspace/.cache/bundle}"
+export BUNDLE_CACHE_PATH="${BUNDLE_CACHE_PATH:-/workspace/.cache/rubygems}"
+export YARN_CACHE_FOLDER="${YARN_CACHE_FOLDER:-/workspace/.cache/yarn}"
+
+echo "== ${APP_NAME}: using gem install path ${BUNDLE_PATH}"
+echo "== ${APP_NAME}: using gem download cache ${BUNDLE_CACHE_PATH}"
+echo "== ${APP_NAME}: using yarn download cache ${YARN_CACHE_FOLDER}"
+
+# Prefer packaged .gem files (filled by host bin/setup). Fall back to network
+# only when the cache is incomplete (e.g. new dependency not yet packaged).
+if bundle check >/dev/null 2>&1; then
+  echo "== ${APP_NAME}: bundle already satisfied"
+else
+  echo "== ${APP_NAME}: bundle install (prefer local gem cache)"
+  if ! bundle install --local; then
+    echo "== ${APP_NAME}: local cache incomplete; fetching missing gems"
+    bundle install
+  fi
+fi
+
+# node_modules and Yarn cache are bind-mounted from the host. Only refresh if
+# the workspace install is missing (fresh volume / incomplete setup).
+if [[ -f /workspace/package.json ]] && [[ -f /workspace/yarn.lock ]]; then
+  if [[ ! -d /workspace/node_modules ]]; then
+    echo "== ${APP_NAME}: yarn install (prefer .cache/yarn downloads)"
+    (
+      cd /workspace
+      # Prefer cache-only; if a package is missing from .cache/yarn, allow network.
+      if ! yarn install --immutable --immutable-cache; then
+        echo "== ${APP_NAME}: yarn cache incomplete; fetching missing packages"
+        yarn install --immutable
+      fi
+    )
+  else
+    echo "== ${APP_NAME}: node_modules present (host mount); skipping yarn install"
+  fi
+fi
+
+bin/rails db:prepare
+exec bin/rails server -b 0.0.0.0 -p "${PORT}"

@@ -1,0 +1,14 @@
+{
+  "name": "docker-bundler-yarn-cache",
+  "private": true,
+  "packageManager": "yarn@4.16.0",
+  "workspaces": [
+    "fred",
+    "george"
+  ],
+  "scripts": {
+    "test": "yarn workspaces foreach -A run test",
+    "test:fred": "yarn workspace fred test",
+    "test:george": "yarn workspace george test"
+  }
+}
