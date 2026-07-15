@@ -1,0 +1,9 @@
+---
+# Shared Bundler *behavior* (not install paths).
+# Linked from .bundle/config, fred/.bundle/config, george/.bundle/config.
+# Paths come from BUNDLE_PATH / BUNDLE_CACHE_PATH (bin/cache-env or compose).
+BUNDLE_CACHE_ALL: "true"
+BUNDLE_CACHE_ALL_PLATFORMS: "true"
+BUNDLE_DISABLE_SHARED_GEMS: "true"
+BUNDLE_JOBS: "4"
+BUNDLE_RETRY: "3"

@@ -21,6 +21,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Host cache locations from config/cache-layout.env (same relatives as compose).
+# shellcheck source=bin/cache-env
+source "${ROOT}/bin/cache-env"
+# Keep classic .yarnrc offline-mirror aligned with CACHE_YARN_MIRROR.
+"${ROOT}/bin/cache-env" --write-yarnrc >/dev/null
+
 SKIP_MISE=0
 SKIP_JS=0
 SKIP_DB=0
@@ -114,9 +120,21 @@ if [[ "$SKIP_JS" -eq 0 ]]; then
 fi
 
 # --- cache directories ---------------------------------------------------------
-step "Ensuring shared cache directories"
-mkdir -p .cache/bundle .cache/rubygems .cache/yarn .cache/yarn-cache
-touch .cache/bundle/.gitkeep .cache/rubygems/.gitkeep .cache/yarn/.gitkeep .cache/yarn-cache/.gitkeep
+step "Ensuring shared cache directories (from config/cache-layout.env)"
+mkdir -p \
+  "${CACHE_BUNDLE}" \
+  "${CACHE_RUBYGEMS}" \
+  "${CACHE_YARN_MIRROR}" \
+  "${CACHE_YARN_FOLDER}"
+touch \
+  "${CACHE_BUNDLE}/.gitkeep" \
+  "${CACHE_RUBYGEMS}/.gitkeep" \
+  "${CACHE_YARN_MIRROR}/.gitkeep" \
+  "${CACHE_YARN_FOLDER}/.gitkeep"
+echo "BUNDLE_PATH=${BUNDLE_PATH}"
+echo "BUNDLE_CACHE_PATH=${BUNDLE_CACHE_PATH}"
+echo "YARN_CACHE_FOLDER=${YARN_CACHE_FOLDER}"
+echo "YARN_OFFLINE_MIRROR=${YARN_OFFLINE_MIRROR}"
 
 # --- root gems (rails generators, rubocop) ------------------------------------
 step "Installing root gems → .cache/bundle"
@@ -222,11 +240,7 @@ echo "  yarn              : $(yarn --version) (classic 1.x expected)"
 if [[ "$DOCKER_BUILD" -eq 1 ]]; then
   step "Building Docker image"
   require_cmd docker
-  if docker compose version >/dev/null 2>&1; then
-    run docker compose build
-  else
-    run docker-compose build
-  fi
+  run "${ROOT}/bin/compose" build
 fi
 
 # --- summary ------------------------------------------------------------------
@@ -234,22 +248,22 @@ step "Setup complete"
 cat <<EOF
 Host tools and download caches are ready for Docker to use preferentially.
 
-  Gem installs:   ${ROOT}/.cache/bundle
-  Gem downloads:  ${ROOT}/.cache/rubygems   (bundle install --local)
-  Yarn mirror:    ${ROOT}/.cache/yarn       (classic yarn-offline-mirror)
-  Yarn cache:     ${ROOT}/.cache/yarn-cache (classic --cache-folder)
-  node_modules:   ${ROOT}/node_modules      (bind-mounted into containers)
+  Layout file:    ${ROOT}/config/cache-layout.env
+  Gem installs:   ${BUNDLE_PATH}
+  Gem downloads:  ${BUNDLE_CACHE_PATH}   (bundle install --local)
+  Yarn mirror:    ${YARN_OFFLINE_MIRROR} (classic yarn-offline-mirror)
+  Yarn cache:     ${YARN_CACHE_FOLDER}
+  node_modules:   ${ROOT}/node_modules
 
 Recommended Docker flow:
   bin/setup
-  docker compose up fred george
-  # containers run bin/docker-app → prefer local caches, network only on miss
+  bin/compose up fred george
+  # use bin/compose (not plain docker compose) so cache-layout.env is loaded
 
 Next steps:
   yarn test
-  (cd fred && bin/rails server -p 3000)
-  (cd george && bin/rails server -p 3001)
-  docker compose up fred george
+  source bin/cache-env && (cd fred && bin/rails server -p 3000)
+  bin/compose up fred george
 
 Re-run anytime; the script is idempotent.
 EOF

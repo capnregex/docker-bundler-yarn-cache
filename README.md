@@ -8,16 +8,17 @@ Test bed for running **two Rails apps** (Fred and George) in a shared Docker dev
 
 ```
 .
-├── .bundle/config          # Root BUNDLE_PATH → .cache/bundle
-├── .cache/
-│   ├── bundle/             # Shared gem *install* tree (host + containers)
-│   ├── rubygems/           # Shared gem *download* cache (.gem files)
-│   ├── yarn/               # Classic yarn-offline-mirror (tarballs)
-│   └── yarn-cache/         # Classic --cache-folder / YARN_CACHE_FOLDER
-├── .yarnrc                 # Classic Yarn 1.x config (not .yarnrc.yml)
+├── config/
+│   ├── cache-layout.env    # SSOT: relative cache paths
+│   └── bundler-flags.yml   # SSOT: Bundler behavior (symlinked as .bundle/config)
+├── .bundle/config → config/bundler-flags.yml
+├── .cache/                 # Materialized caches (names from cache-layout.env)
+├── .yarnrc                 # Classic Yarn 1 offline-mirror (from layout via setup)
 ├── package.json            # Classic Yarn workspaces (fred + george)
 ├── yarn.lock               # Classic Yarn v1 lockfile
 ├── bin/setup               # Fresh clone: install + warm download caches
+├── bin/cache-env           # Export absolute BUNDLE_* / YARN_* from layout
+├── bin/compose             # docker compose --env-file config/cache-layout.env
 ├── bin/docker-app          # Container entry: prefer local caches
 ├── fred/                   # Rails 8 + Hotwire app (port 3000)
 │   ├── app/javascript/controllers/hello_controller.js
@@ -72,18 +73,27 @@ Run setup **on the host before** starting containers so downloads are already lo
 
 ```bash
 bin/setup
-docker compose up fred george
+bin/compose up fred george    # prefer bin/compose over plain docker compose
 ```
 
 | Cache | Role |
 |-------|------|
-| `.cache/rubygems` | Packaged gems (`bundle cache`); `bin/docker-app` runs `bundle install --local` first |
-| `.cache/bundle` | Installed gem tree (extensions may rebuild inside the container) |
-| `.cache/yarn` | Classic **yarn-offline-mirror** tarballs; `yarn install --offline` preferred |
-| `.cache/yarn-cache` | Classic `YARN_CACHE_FOLDER` / `--cache-folder` |
-| `node_modules` | Linked on the host and bind-mounted into the container |
+| `.cache/rubygems` | Packaged gems; `bundle install --local` first in the container |
+| `.cache/bundle` | Installed gem tree |
+| `.cache/yarn` | Classic offline-mirror tarballs |
+| `.cache/yarn-cache` | Classic `YARN_CACHE_FOLDER` |
+| `node_modules` | Host install, bind-mounted via monorepo mount |
 
-Containers use `bin/docker-app`: `--offline` → `--prefer-offline` → network (classic Yarn 1 flags).
+**Where settings live (DRY)**
+
+| Setting | Single source |
+|---------|----------------|
+| Relative cache dirs | **`config/cache-layout.env`** |
+| Absolute paths on host | **`bin/cache-env`** (prefix layout with monorepo root) |
+| Absolute paths in Docker | **`docker-compose.yml`** `x-cache-env` → `/workspace/${CACHE_*}` via **`bin/compose`** |
+| Bundler flags (non-path) | **`config/bundler-flags.yml`** (symlinked as each `.bundle/config`) |
+| Yarn offline-mirror | **`.yarnrc`** generated from layout (`bin/cache-env --write-yarnrc`) |
+| `PORT` / `HOME` | Compose only (context-dependent) |
 
 ```bash
 # Run apps on the host
@@ -128,35 +138,29 @@ Build and start both apps:
 # Optional: match host UID/GID (defaults to 1000)
 cp .env.example .env
 
-docker compose build
-docker compose up fred george
+bin/compose build
+bin/compose up fred george
 ```
 
 - **Fred:** http://localhost:3000  
 - **George:** http://localhost:3001  
 - Health checks: `/up` on each app  
 
-Interactive shell in the Arch image:
+Interactive shell:
 
 ```bash
-docker compose --profile dev run --rm dev
+bin/compose --profile dev run --rm dev
 ```
 
 ### Volume mounts
 
 | Host path | Container path | Purpose |
 |-----------|----------------|---------|
-| `.` | `/workspace` | Full monorepo (includes `node_modules`, `.yarnrc`) |
-| `.cache/bundle` | `/workspace/.cache/bundle` | Bundler install tree |
-| `.cache/rubygems` | `/workspace/.cache/rubygems` | Packaged `.gem` download cache |
-| `.cache/yarn` | `/workspace/.cache/yarn` | Classic yarn-offline-mirror |
-| `.cache/yarn-cache` | `/workspace/.cache/yarn-cache` | Classic yarn cache folder |
-| `fred` | `/workspace/fred` | Fred app |
-| `george` | `/workspace/george` | George app |
+| `.` | `/workspace` | Full monorepo (apps, `.cache`, `node_modules`, config) |
 
-Compose sets `BUNDLE_PATH`, `BUNDLE_CACHE_PATH`, and `YARN_CACHE_FOLDER` (classic cache folder). The offline mirror is configured in **`.yarnrc`** (`yarn-offline-mirror`).
+One bind is enough; subpaths are not re-mounted. Cache locations still come from **`config/cache-layout.env`** → env vars.
 
-**Native extensions:** host-built native gems may not load in the container. `bin/docker-app` reinstalls from `.cache/rubygems` with `bundle install --local` (no re-download when the cache is complete), compiling extensions inside the image as needed.
+**Native extensions:** host-built native gems may not load in the container. `bin/docker-app` reinstalls from `BUNDLE_CACHE_PATH` with `bundle install --local` when needed.
 
 ## RuboCop
 

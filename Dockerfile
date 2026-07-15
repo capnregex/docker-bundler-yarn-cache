@@ -7,6 +7,8 @@ ARG DEV_UID=1000
 ARG DEV_GID=1000
 ARG MISE_VERSION=v2026.5.15
 
+# Image/user layout only. Bundler + Yarn project settings live in committed
+# monorepo config files (.bundle/config, .yarnrc) mounted at /workspace.
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     MISE_DATA_DIR=/home/dev/.local/share/mise \
@@ -14,8 +16,6 @@ ENV LANG=C.UTF-8 \
     MISE_CACHE_DIR=/home/dev/.cache/mise \
     MISE_RUBY_COMPILE=false \
     PATH=/home/dev/.local/bin:/home/dev/.local/share/mise/shims:${PATH} \
-    BUNDLE_PATH=/workspace/.cache/bundle \
-    YARN_CACHE_FOLDER=/workspace/.cache/yarn \
     HOME=/home/dev \
     WORKSPACE=/workspace
 

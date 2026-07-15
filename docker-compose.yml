@@ -1,9 +1,31 @@
-# Development compose: Arch + mise image with bind mounts for shared gem/yarn
-# download caches and the Fred / George Rails apps.
+# Development compose: Arch + mise image with bind mounts for Fred / George
+# and shared caches under .cache/.
 #
-# Prefer host-warmed caches: run `bin/setup` on the host first, then
-# `docker compose up`. App containers use bin/docker-app which installs from
-# .cache/rubygems and classic Yarn offline-mirror (.cache/yarn) preferentially.
+# Cache *relative* paths: config/cache-layout.env (single source of truth).
+# Always run via: bin/compose …   (injects that file for ${CACHE_*} interpolation)
+# Host scripts: source bin/cache-env
+#
+# Prefer host-warmed caches: bin/setup && bin/compose up fred george
+
+# Container paths = /workspace + relative layout (defaults match cache-layout.env).
+x-cache-env: &cache-env
+  BUNDLE_PATH: /workspace/${CACHE_BUNDLE:-.cache/bundle}
+  BUNDLE_CACHE_PATH: /workspace/${CACHE_RUBYGEMS:-.cache/rubygems}
+  YARN_CACHE_FOLDER: /workspace/${CACHE_YARN_FOLDER:-.cache/yarn-cache}
+
+x-runtime-env: &runtime-env
+  HOME: /home/dev
+  MISE_DATA_DIR: /home/dev/.local/share/mise
+
+# Merged env for every service; apps only add PORT.
+x-service-env: &service-env
+  <<: [*cache-env, *runtime-env]
+
+x-healthcheck: &healthcheck-defaults
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 60s
 
 services:
   base: &base
@@ -17,79 +39,40 @@ services:
     user: dev
     working_dir: /workspace
     environment:
-      # Install tree + download caches (absolute so app-relative configs cannot drift).
-      BUNDLE_PATH: /workspace/.cache/bundle
-      BUNDLE_CACHE_PATH: /workspace/.cache/rubygems
-      BUNDLE_CACHE_ALL: "true"
-      BUNDLE_CACHE_ALL_PLATFORMS: "true"
-      BUNDLE_DISABLE_SHARED_GEMS: "true"
-      # Classic Yarn 1.x: user cache folder (offline mirror is via .yarnrc)
-      YARN_CACHE_FOLDER: /workspace/.cache/yarn-cache
-      MISE_DATA_DIR: /home/dev/.local/share/mise
-      HOME: /home/dev
+      <<: *service-env
     volumes:
-      # Full monorepo (apps, root tooling, node_modules, caches, .yarnrc)
+      # Whole monorepo (includes .cache, apps, config, node_modules).
       - .:/workspace:cached
-      # Explicit binds for shared install + download caches
-      - ./.cache/bundle:/workspace/.cache/bundle:cached
-      - ./.cache/rubygems:/workspace/.cache/rubygems:cached
-      - ./.cache/yarn:/workspace/.cache/yarn:cached
-      - ./.cache/yarn-cache:/workspace/.cache/yarn-cache:cached
-      - ./fred:/workspace/fred:cached
-      - ./george:/workspace/george:cached
     stdin_open: true
     tty: true
 
-  # Interactive shell for general development / cache inspection
   dev:
     <<: *base
     profiles: ["dev"]
     command: ["bash", "-lc", "mise install && exec bash"]
 
-  # Fred Rails app (http://localhost:3000)
   fred:
     <<: *base
     working_dir: /workspace/fred
     environment:
-      BUNDLE_PATH: /workspace/.cache/bundle
-      BUNDLE_CACHE_PATH: /workspace/.cache/rubygems
-      BUNDLE_CACHE_ALL: "true"
-      BUNDLE_CACHE_ALL_PLATFORMS: "true"
-      BUNDLE_DISABLE_SHARED_GEMS: "true"
-      YARN_CACHE_FOLDER: /workspace/.cache/yarn-cache
-      MISE_DATA_DIR: /home/dev/.local/share/mise
-      HOME: /home/dev
+      <<: *service-env
       PORT: "3000"
     command: ["bash", "-lc", "exec /workspace/bin/docker-app"]
     ports:
       - "3000:3000"
     healthcheck:
+      <<: *healthcheck-defaults
       test: ["CMD", "curl", "-f", "http://localhost:3000/up"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 60s
 
-  # George Rails app (http://localhost:3001)
   george:
     <<: *base
     working_dir: /workspace/george
     environment:
-      BUNDLE_PATH: /workspace/.cache/bundle
-      BUNDLE_CACHE_PATH: /workspace/.cache/rubygems
-      BUNDLE_CACHE_ALL: "true"
-      BUNDLE_CACHE_ALL_PLATFORMS: "true"
-      BUNDLE_DISABLE_SHARED_GEMS: "true"
-      YARN_CACHE_FOLDER: /workspace/.cache/yarn-cache
-      MISE_DATA_DIR: /home/dev/.local/share/mise
-      HOME: /home/dev
+      <<: *service-env
       PORT: "3001"
     command: ["bash", "-lc", "exec /workspace/bin/docker-app"]
     ports:
       - "3001:3001"
     healthcheck:
+      <<: *healthcheck-defaults
       test: ["CMD", "curl", "-f", "http://localhost:3001/up"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 60s

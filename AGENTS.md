@@ -25,33 +25,25 @@ Prefer changes that preserve this multi-app + shared-cache design over collapsin
 | App gems | `fred/Gemfile`, `george/Gemfile` (+ lockfiles) |
 | JS workspaces | root `package.json`, classic `yarn.lock`, **`.yarnrc`** (Yarn 1) |
 | App JS test deps | `fred/package.json`, `george/package.json` |
-| Bundler install path | `.bundle/config` → `.cache/bundle` |
-| Bundler download cache | `BUNDLE_CACHE_PATH` → `.cache/rubygems` |
-| Yarn offline mirror | `.yarnrc` `yarn-offline-mirror` → `.cache/yarn` |
-| Yarn cache folder | `.yarnrc` / `YARN_CACHE_FOLDER` → `.cache/yarn-cache` |
+| Cache path SSOT | `config/cache-layout.env` (relative dirs only) |
+| Host absolute paths | `bin/cache-env` |
+| Container absolute paths | `docker-compose.yml` `x-cache-env` + **`bin/compose`** |
+| Bundler flags SSOT | `config/bundler-flags.yml` (symlinked to each `.bundle/config`) |
+| Yarn offline-mirror | `.yarnrc` from `bin/cache-env --write-yarnrc` |
 | Host bootstrap | `bin/setup` |
 | Container app entry | `bin/docker-app` |
-| Compose / image | `docker-compose.yml`, `Dockerfile` |
 
 Do not bump Ruby or Rails casually without updating `mise.toml`, both apps’ `.ruby-version` / Gemfiles, and verifying `bundle install` into `.cache/bundle`.
 
 ## Bundle rules
 
-1. **Always** install gems into `.cache/bundle` (already configured via `.bundle/config`).
-2. Run app commands from the app directory so the correct Gemfile is used:
-   - `cd fred && bundle exec rails …`
-   - `cd george && bundle exec rails …`
-3. Root-level `bundle exec` is for **tooling only** (e.g. generators, RuboCop from the root Gemfile).
-4. After changing any Gemfile, run `bundle install` for that Gemfile and commit the lockfile. Do **not** commit `.cache/bundle` contents.
-5. App-level config uses relative paths:
-
-   ```yaml
-   # fred/.bundle/config and george/.bundle/config
-   BUNDLE_PATH: "../.cache/bundle"
-   BUNDLE_CACHE_PATH: "../.cache/rubygems"
-   ```
-
-6. After `bundle install`, package downloads with `bundle cache --all-platforms` into `.cache/rubygems` so containers can `bundle install --local`.
+1. Change cache **directory names** only in **`config/cache-layout.env`**, then run `bin/setup` (or `bin/cache-env --write-yarnrc`).
+2. Change Bundler **flags** only in **`config/bundler-flags.yml`** (symlinks pick it up).
+3. Always `source bin/cache-env` on the host before `bundle` / app commands.
+4. Always use **`bin/compose`** instead of raw `docker compose` so layout env is loaded.
+5. Run app commands from the app directory with the correct Gemfile:
+   - `source bin/cache-env && cd fred && bundle exec rails …`
+6. After Gemfile changes: `bundle install` + `bundle cache --all-platforms`; commit lockfiles, not `.cache/*`.
 
 ## Docker rules
 
@@ -59,11 +51,11 @@ Do not bump Ruby or Rails casually without updating `mise.toml`, both apps’ `.
 2. Prefer Compose services `fred` / `george` / `dev` over ad-hoc `docker run` unless debugging the image.
 3. Keep mounts for `.cache/bundle`, `.cache/yarn`, `fred`, and `george` intact.
 4. Match host UID/GID with `DEV_UID` / `DEV_GID` build args when bind-mount permission issues appear.
-5. Container `BUNDLE_PATH` = `/workspace/.cache/bundle` and `BUNDLE_CACHE_PATH` = `/workspace/.cache/rubygems`.
-6. **Never** set `BUNDLE_APP_CONFIG` to the monorepo root `.bundle` while running app Gemfiles. That makes Bundler apply root `path: ".cache/bundle"` relative to the app root and creates stray `fred/.cache/bundle` / `george/.cache/bundle` trees.
-7. Do not commit per-app `.cache/` directories or `.cache/rubygems` / `.cache/yarn` contents.
-8. Preferred flow: host `bin/setup` (warm caches) → `docker compose up` (`bin/docker-app` prefers `bundle install --local` and classic `yarn install --offline` / `--prefer-offline`).
-9. Do **not** introduce Yarn Berry (`.yarnrc.yml`, `packageManager: yarn@2+`, PnP) on this branch.
+5. **Never** set `BUNDLE_APP_CONFIG` to the monorepo root while running app Gemfiles.
+6. Do not commit `.cache/**` contents (only `.gitkeep` placeholders).
+7. Preferred flow: `bin/setup` → `bin/compose up fred george`.
+8. Do **not** introduce Yarn Berry on this branch.
+9. Do **not** re-duplicate path strings in app configs; layout + flags files only.
 
 ## Rails apps (Fred & George)
 
@@ -104,10 +96,10 @@ bin/setup --docker-build   # also build Arch image
 bin/setup --help
 
 # Boot both apps in Docker
-docker compose up --build fred george
+bin/compose up --build fred george
 
 # Shell in Arch+mise image
-docker compose --profile dev run --rm dev
+bin/compose --profile dev run --rm dev
 
 # Lint (root RuboCop)
 bundle exec rubocop
