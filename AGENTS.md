@@ -16,6 +16,16 @@ This monorepo is a **development test bed** for:
 
 Prefer changes that preserve this multi-app + shared-cache design over collapsing apps into one tree.
 
+## Supported platforms
+
+This project must remain usable in all of these environments:
+
+- **macOS** natively (host `bin/setup`, mise, Docker Desktop or equivalent)
+- **Linux** natively
+- **Windows via WSL** (run tools inside WSL; Docker Desktop on Windows with the WSL integration enabled)
+
+Do not introduce host-only assumptions that break any of these (e.g. hard-coded Linux paths, macOS-only Docker socket paths, or scripts that require a non-WSL Windows shell). Prefer portable shell, path, and Compose patterns; treat WSL as a Linux host that talks to Docker Desktop.
+
 ## Tooling pins
 
 | Tool | Source of truth |

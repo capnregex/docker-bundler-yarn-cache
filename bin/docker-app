@@ -16,7 +16,12 @@ set -euo pipefail
 PORT="${PORT:-3000}"
 APP_NAME="$(basename "$(pwd)")"
 
-eval "$(mise activate bash)" 2>/dev/null || true
+# Login shells (compose uses bash -lc) already activate mise via bashrc/profile.
+# Only activate when this process has not inherited an active mise session.
+if command -v mise >/dev/null 2>&1 && [[ -z "${MISE_SHELL:-}" ]]; then
+  # shellcheck disable=SC1091
+  eval "$(mise activate bash)" 2>/dev/null || true
+fi
 
 export BUNDLE_PATH="${BUNDLE_PATH:-/workspace/.cache/bundle}"
 export BUNDLE_CACHE_PATH="${BUNDLE_CACHE_PATH:-/workspace/.cache/rubygems}"

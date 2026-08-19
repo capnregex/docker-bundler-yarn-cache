@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Setup this monorepo after a fresh clone (or re-run anytime — idempotent).
 #
-# Installs mise tools, downloads gems + node packages into shared host caches,
-# installs them for local use, and prepares Fred + George databases.
-# Run this on the host before docker compose so containers can prefer those
-# cached downloads (see bin/docker-app).
+# Installs mise if missing, installs mise tools from mise.toml, downloads gems
+# + node packages into shared host caches, installs them for local use, and
+# prepares Fred + George databases. Run this on the host before docker compose
+# so containers can prefer those cached downloads (see bin/docker-app).
 #
 # Usage:
 #   bin/setup
 #   bin/setup --reset          # also reset app databases
 #   bin/setup --docker-build   # build the Arch dev image after host setup
-#   bin/setup --skip-mise      # assume Ruby/Node/Yarn already on PATH
+#   bin/setup --skip-mise      # do not install mise or run mise install
 #   bin/setup --skip-js        # skip yarn install / yarn cache warm
 #   bin/setup --skip-db        # skip rails db:prepare
 #   bin/setup --skip-apps      # only root gems + yarn (no per-app bundle/db)
@@ -66,12 +66,65 @@ require_cmd() {
   fi
 }
 
-# Prefer mise-provided shims once tools are installed.
+# Prefer mise-provided tools on PATH. Skip full activate if this shell (or a
+# parent that exported MISE_SHELL) already ran `mise activate`.
 activate_mise() {
-  if command -v mise >/dev/null 2>&1; then
-    # shellcheck disable=SC1091
-    eval "$(mise activate bash)"
+  if ! command -v mise >/dev/null 2>&1; then
+    return 0
   fi
+  if [[ -n "${MISE_SHELL:-}" ]]; then
+    echo "mise already activated (MISE_SHELL=${MISE_SHELL}); refreshing tool env"
+    # shellcheck disable=SC1091
+    eval "$(mise hook-env -s bash)" 2>/dev/null || true
+    return 0
+  fi
+  # shellcheck disable=SC1091
+  eval "$(mise activate bash)"
+}
+
+# Ensure ~/.local/bin is on PATH (default location for curl https://mise.run | sh).
+ensure_local_bin_on_path() {
+  local local_bin="${HOME}/.local/bin"
+  if [[ -d "$local_bin" && ":${PATH}:" != *":${local_bin}:"* ]]; then
+    export PATH="${local_bin}:${PATH}"
+  fi
+}
+
+# Install mise if missing (macOS / Linux / WSL). Official installer: https://mise.jdx.dev
+install_mise() {
+  step "Installing mise (not found on PATH)"
+  ensure_local_bin_on_path
+
+  if command -v mise >/dev/null 2>&1; then
+    echo "mise already available after PATH refresh: $(command -v mise)"
+    return 0
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "error: mise is not installed and curl is missing (needed for https://mise.run)" >&2
+    echo "       install mise manually: https://mise.jdx.dev/installing-mise.html" >&2
+    exit 1
+  fi
+
+  echo "Installing mise via https://mise.run (installs to ~/.local/bin by default)"
+  run curl https://mise.run | sh
+  ensure_local_bin_on_path
+
+  if ! command -v mise >/dev/null 2>&1; then
+    # Installer may have written the binary even if PATH still lacks it.
+    if [[ -x "${HOME}/.local/bin/mise" ]]; then
+      export PATH="${HOME}/.local/bin:${PATH}"
+    fi
+  fi
+
+  if ! command -v mise >/dev/null 2>&1; then
+    echo "error: mise install finished but 'mise' is still not on PATH" >&2
+    echo "       expected binary at ~/.local/bin/mise — add that dir to PATH and re-run" >&2
+    echo "       docs: https://mise.jdx.dev/installing-mise.html" >&2
+    exit 1
+  fi
+
+  echo "mise installed: $(command -v mise) ($(mise --version 2>/dev/null || true))"
 }
 
 cache_gems() {
@@ -85,17 +138,20 @@ echo "$ROOT"
 
 # --- mise (Ruby / Node / Yarn) -------------------------------------------------
 if [[ "$SKIP_MISE" -eq 0 ]]; then
-  step "Installing mise tools (mise.toml)"
-  if command -v mise >/dev/null 2>&1; then
-    run mise trust "$ROOT/mise.toml" || true
-    run mise install
-    activate_mise
+  ensure_local_bin_on_path
+  if ! command -v mise >/dev/null 2>&1; then
+    install_mise
   else
-    echo "warning: mise not found; using whatever Ruby/Node/Yarn are on PATH"
-    echo "         install mise from https://mise.jdx.dev for pinned versions"
+    echo "mise found: $(command -v mise) ($(mise --version 2>/dev/null || true))"
   fi
+
+  step "Installing mise tools (mise.toml)"
+  run mise trust "$ROOT/mise.toml" || true
+  run mise install
+  activate_mise
 else
   step "Skipping mise (--skip-mise)"
+  ensure_local_bin_on_path
   activate_mise
 fi
 
